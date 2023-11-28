@@ -1527,8 +1527,6 @@ impl Map2 for MatMul {
         rhs: &[T],
         rhs_l: &Layout,
     ) -> Result<Vec<T>> {
-        use gemm::{gemm, Parallelism};
-
         match T::DTYPE {
             DType::F16 | DType::F32 | DType::F64 => {}
             _ => Err(Error::UnsupportedDTypeForOp(T::DTYPE, "matmul").bt())?,
@@ -1567,39 +1565,94 @@ impl Map2 for MatMul {
         let dst_cs = dst_strides[1];
 
         let mut dst = vec![T::zero(); b * m * n];
-        let num_threads = crate::utils::get_num_threads();
-        let parallelism = if num_threads > 1 {
-            Parallelism::Rayon(num_threads)
-        } else {
-            Parallelism::None
-        };
-        for step in 0..b {
-            let lhs_p = &lhs[step * a_skip..];
-            let rhs_p = &rhs[step * b_skip..];
-            let dst_p = &mut dst[step * c_skip..];
-            unsafe {
-                gemm(
-                    /* m: usize = */ m,
-                    /* n: usize = */ n,
-                    /* k: usize = */ k,
-                    /* dst: *mut T = */ dst_p.as_mut_ptr(),
-                    /* dst_cs: isize = */ dst_cs as isize,
-                    /* dst_rs: isize = */ dst_rs as isize,
-                    /* read_dst: bool = */ false,
-                    /* lhs: *const T = */ lhs_p.as_ptr(),
-                    /* lhs_cs: isize = */ lhs_cs as isize,
-                    /* lhs_rs: isize = */ lhs_rs as isize,
-                    /* rhs: *const T = */ rhs_p.as_ptr(),
-                    /* rhs_cs: isize = */ rhs_cs as isize,
-                    /* rhs_rs: isize = */ rhs_rs as isize,
-                    /* alpha: T = */ T::zero(),
-                    /* beta: T = */ T::one(),
-                    /* conj_dst: bool = */ false,
-                    /* conj_lhs: bool = */ false,
-                    /* conj_rhs: bool = */ false,
-                    parallelism,
-                )
+        match T::DTYPE {
+            DType::F16 => {
+                let num_threads = crate::utils::get_num_threads();
+                let parallelism = if num_threads > 1 {
+                    gemm::Parallelism::Rayon(num_threads)
+                } else {
+                    gemm::Parallelism::None
+                };
+                for step in 0..b {
+                    let lhs_p = &lhs[step * a_skip..];
+                    let rhs_p = &rhs[step * b_skip..];
+                    let dst_p = &mut dst[step * c_skip..];
+                    unsafe {
+                        gemm::gemm(
+                            /* m: usize = */ m,
+                            /* n: usize = */ n,
+                            /* k: usize = */ k,
+                            /* dst: *mut T = */ dst_p.as_mut_ptr(),
+                            /* dst_cs: isize = */ dst_cs as isize,
+                            /* dst_rs: isize = */ dst_rs as isize,
+                            /* read_dst: bool = */ false,
+                            /* lhs: *const T = */ lhs_p.as_ptr(),
+                            /* lhs_cs: isize = */ lhs_cs as isize,
+                            /* lhs_rs: isize = */ lhs_rs as isize,
+                            /* rhs: *const T = */ rhs_p.as_ptr(),
+                            /* rhs_cs: isize = */ rhs_cs as isize,
+                            /* rhs_rs: isize = */ rhs_rs as isize,
+                            /* alpha: T = */ T::zero(),
+                            /* beta: T = */ T::one(),
+                            /* conj_dst: bool = */ false,
+                            /* conj_lhs: bool = */ false,
+                            /* conj_rhs: bool = */ false,
+                            parallelism,
+                        )
+                    }
+                }
             }
+            DType::F32 => {
+                for step in 0..b {
+                    let lhs_p = &lhs[step * a_skip..];
+                    let rhs_p = &rhs[step * b_skip..];
+                    let dst_p = &mut dst[step * c_skip..];
+                    unsafe {
+                        matrixmultiply::sgemm(
+                            /* m: usize = */ m,
+                            /* n: usize = */ n,
+                            /* k: usize = */ k,
+                            /* alpha: T = */ T::zero(),
+                            /* rhs: *const T = */ rhs_p.as_ptr() as *const f32,
+                            /* rhs_rs: isize = */ rhs_rs as isize,
+                            /* rhs_cs: isize = */ rhs_cs as isize,
+                            /* lhs: *const T = */ lhs_p.as_ptr() as *const f32,
+                            /* lhs_rs: isize = */ lhs_rs as isize,
+                            /* lhs_cs: isize = */ lhs_cs as isize,
+                            /* beta: T = */ T::one(),
+                            /* dst: *mut T = */ dst_p.as_mut_ptr() as *mut f32,
+                            /* dst_rs: isize = */ dst_rs as isize,
+                            /* dst_cs: isize = */ dst_cs as isize,
+                        )
+                    }
+                }
+            }
+            DType::F64 => {
+                for step in 0..b {
+                    let lhs_p = &lhs[step * a_skip..];
+                    let rhs_p = &rhs[step * b_skip..];
+                    let dst_p = &mut dst[step * c_skip..];
+                    unsafe {
+                        matrixmultiply::dgemm(
+                            /* m: usize = */ m,
+                            /* n: usize = */ n,
+                            /* k: usize = */ k,
+                            /* alpha: T = */ T::zero(),
+                            /* rhs: *const T = */ rhs_p.as_ptr() as *const f64,
+                            /* rhs_rs: isize = */ rhs_rs as isize,
+                            /* rhs_cs: isize = */ rhs_cs as isize,
+                            /* lhs: *const T = */ lhs_p.as_ptr() as *const f64,
+                            /* lhs_rs: isize = */ lhs_rs as isize,
+                            /* lhs_cs: isize = */ lhs_cs as isize,
+                            /* beta: T = */ T::one(),
+                            /* dst: *mut T = */ dst_p.as_mut_ptr() as *mut f64,
+                            /* dst_rs: isize = */ dst_rs as isize,
+                            /* dst_cs: isize = */ dst_cs as isize,
+                        )
+                    }
+                }
+            }
+            dtype => Err(Error::UnsupportedDTypeForOp(dtype, "matmul").bt())?,
         }
         Ok(dst)
     }
